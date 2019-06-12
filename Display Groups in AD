@@ -1,0 +1,4 @@
+Get-ADGroupMember ‘Domain Admins’
+
+Get-ADGgroup -filter * | sort name | select Name
+Get-ADGroupMember -Identity ‘Domain Admins’| ft name
