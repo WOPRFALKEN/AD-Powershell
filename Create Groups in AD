@@ -1,0 +1,9 @@
+create groups in AD
+
+New-ADGroup -Path "OU=Groups,OU=Brasil,DC=theitbros,DC=com" -Name "BrasilUsers" -GroupScope Global -GroupCategory Distribution
+Using the following command, you can create a new security group:
+
+New-ADGroup –Name RemoteAccessUsers  -GroupScope Universal -GroupCategory Security -Path "OU=Groups,OU=USA,DC=theitbros,DC=com"
+Now you can add users to this group using Add-ADGroupMember cmdlet:
+
+Add-ADGroupMember RemoteAccessUsers  -Members user1,user2,user3
