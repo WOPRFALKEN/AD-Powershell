@@ -1,0 +1,35 @@
+
+If the specified group contains other Active Directory groups, you must use the Recursive parameter to list members of Active Directory based on nested groups.
+
+Get-ADGroupMember -Identity ‘Domain Admins’ -Recursive | ft name
+
+----->The -recursive switch instructs the Get-ADGroupMember command to parse each nested group and display only objects that are not containers (user or computer). This command will display even those users who do not directly belong to the specified group.
+
+You can display more detailed information about the accounts in this group in this way:
+
+Get-ADGroupMember -Identity ‘Domain Admins’ | foreach { Get-ADUser $_ -Properties * }
+----->You can use the more complex PowerShell command, which allows you to list all members of a certain domain security group with information about the company, department and job title, followed by sorting and grouping depending on the specific attribute (company):
+
+Get-ADGroupMember -Recursive ‘Domain Admins’ | ForEach {
+
+Get-ADUser -filter {samaccountname -eq $_.SamAccountName}  -Properties displayName, company, title, department
+
+}  | Sort-Object company,displayName | Format-Table displayName,company,department,title
+
+------>In order to extract group members from Active Directory into a text file, add the following command:
+
+| Out-File -Width 5000 "C:\PS\ADGroupUsersByCompany.txt"
+To export the list to the CSV csv, add the following pipe:
+
+| Export-Csv -NoTypeInformation .\ADGroupUsersByCompany.csv -Encoding Unicode
+------>You can calculate the total number of users in a group:
+
+(Get-ADGroupMember -Identity Administrators).Count
+------>Here is another useful example. Let’s try to find all AD groups containing the *Admin* keyword in the name, and display the users that are added in these groups. To display only unique objects, use the -uniq argument:
+
+Get-ADGroup -filter 'SamAccountName -like "*Admin*"' | Get-ADGroupMember -recursive|Select-Object -uniq
+------>In some cases, you can face error, which occurs during the execution of the Get-ADGroupMember command:
+
+Get-ADGroupMember : The specified directory service attribute or value does not exist
+
+------>This means that the group includes users from other forests (foreign security principals). The Get-ADGroupMember cmdlet doesn’t support working with users of different forests in Active Directory.
