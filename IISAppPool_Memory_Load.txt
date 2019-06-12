@@ -1,0 +1,336 @@
+
+
+#################################################################################### 
+# Script Usage:
+# ./IISAppPool_Memory_Load.ps1 "/metricName::IISAppPool_Memory_Load /metric::IISAppPool_Memory_Load /warn::4 /critical::7 /alert::1 /params::"
+#####################################################################################
+$ErrorActionPreference = "SilentlyContinue" 
+
+Import-Module -Name WebAdministration
+
+$CurrentDir = split-path -parent $MyInvocation.MyCommand.Definition
+$AgentPath = split-path -parent $CurrentDir
+$AbsoluteFilePath = $MyInvocation.MyCommand.Path
+
+Function ParseArgs($ArgsArr)
+{
+	if($ArgsArr.count -gt 0)
+	{
+	   for($i=0;$i -le $ArgsArr.count-1;$i++)
+		{
+			$strArgs = $strArgs + [string]($ArgsArr[$i])	
+		}
+	}	
+	if($strArgs.Contains("/metricName::") -ne 0)
+	{
+		$MetricNameTokens1 = $strArgs -split "/metricName::", 2
+		$MetricNameTokens= $MetricNameTokens1[1].Trim() 
+
+		if($MetricNameTokens.Contains("/") -ne 0)
+		 {
+			$MetricNameTokens1 = $MetricNameTokens -split "/", 2
+			$MetricNameTokens = $MetricNameTokens1[0].Trim() 				
+		 }
+	}	
+	if($strArgs.Contains("/metric::") -ne 0)
+	{
+		$MetricTokens1 = $strArgs -split "/metric::", 2     
+		$MetricTokens = $MetricTokens1[1].Trim()
+			
+		if($MetricTokens.Contains("/") -ne 0)
+		{	    
+			$MetricTokens1 = $MetricTokens -split "/", 2
+			$MetricTokens = $MetricTokens1[0].Trim()
+		}
+	}
+	if($strArgs.Contains("/warn::") -ne 0)
+	{
+		$WarningThresTokens1 = $strArgs -split "warn::", 2		   
+		$WarningThresTokens = $WarningThresTokens1[1].Trim()
+		 
+		if($WarningThresTokens.Contains("/") -ne 0)
+		{
+		   $WarningThresTokens1 = $WarningThresTokens -split "/", 2
+		   $WarningThresTokens =  $WarningThresTokens1[0].Trim()
+		}
+	}
+	if($strArgs.Contains("/critical::") -ne 0)
+	{
+		$CriticalThresTokens1 = $strArgs -split "/critical::", 2
+		$CriticalThresTokens = $CriticalThresTokens1[1].Trim()
+		  
+		if($CriticalThresTokens.Contains("/") -ne 0)
+		{	  
+			$CriticalThresTokens1 = $CriticalThresTokens -split "/", 2
+			$CriticalThresTokens = $CriticalThresTokens1[0].Trim()
+		}
+	}	
+	if($strArgs.Contains("/alert::") -ne 0)
+	{
+		$AlertFlagTokens1 =  $strArgs -split "/alert::", 2
+		$AlertFlagTokens = $AlertFlagTokens1[1].Trim()
+		   
+		if($AlertFlagTokens.Contains("/") -ne 0)
+		{
+			$AlertFlagTokens1 = $AlertFlagTokens -split "/", 2
+			$AlertFlagTokens =  $AlertFlagTokens1[0].Trim()
+		}	    
+	}
+	if($strArgs.Contains("/params::") -ne 0)
+	{	    
+		$ParamsTokens1 = $strArgs -split "/params::", 2
+		$ParamsTokens = $ParamsTokens1[1].Trim()
+			  
+		if($ParamsTokens.Contains("/") -ne 0)
+		{
+			$ParamsTokens1 = $ParamsTokens -split "/", 2
+			$ParamsTokens = $ParamsTokens1[0].Trim()		 
+		}	      
+	}
+	return $MetricNameTokens, $MetricTokens, $WarningThresTokens, $CriticalThresTokens, $AlertFlagTokens, $ParamsTokens
+}
+##################### Functions ###################
+# Block of code to save new state 
+###################################################
+Function SaveNewState([string]$MetricName,[string]$Instance,[string]$State)
+{	
+	$prevstatefolder = $AgentPath + "\log\prevstate"
+	If (Test-Path $prevstatefolder)
+	{
+	}
+	Else
+	{ 
+		New-Item -ItemType directory -Path $prevstatefolder
+	}
+	
+	$ExePath = $prevstatefolder + "\" + $MetricName + ".txt"
+		        
+	If (Test-Path $ExePath)
+	{
+		$monexists = 0
+		$newdatafile = $null
+		$fileReader = Get-Content $ExePath
+		foreach($data in $fileReader)
+		{
+			if($data.StartsWith($MetricName +":"+ $Instance))
+			{
+				$monexists = 1
+				$newdatafile = $newdatafile + $MetricName +":"+ $Instance + "--" + $State  + "`r`n"
+			}
+			Else
+			{
+				$newdatafile = $newdatafile + $data + "`r`n"
+			}
+		}
+		If($monexists -eq 0)
+		{
+			$newdatafile = $newdatafile + $MetricName +":"+ $Instance + "--" + $State + "`r`n"
+		}
+		$newdatafile | Out-File $ExePath		
+	}
+	Else
+	{
+		$MetricName +":"+ $Instance + "--" + $State   | Out-File $ExePath
+	}
+}
+###########################################
+#Block of code to read old state 
+###########################################
+Function CheckOldState([string]$MetricName,[string]$Instance)
+{		         
+	$ExePath = $AgentPath + "\log\prevstate\" + $MetricName + ".txt"
+	
+	If (Test-Path $ExePath)
+	{
+		$oldstate = "Ok"
+		$fileReader = Get-Content $ExePath             
+		foreach($data in $fileReader)
+		{
+			if($data.StartsWith($MetricName +":"+ $Instance))
+			{
+				$oldstate = $data.Substring($data.IndexOf("--") + 2)
+			}
+		}
+		$CheckOldState = $oldstate
+	}
+	else
+	{
+	 $CheckOldState = "Ok"	
+	}    
+	return  $CheckOldState
+}
+#######################################################################################
+# Block of code to prepare alert payload and to send alert by invoking AgentSockIPC.exe
+#######################################################################################
+Function PrepareAlert([string]$MetricName,[string]$Component,[string]$OldState,[string]$NewState,[string]$Description,[string]$Subject)
+{	
+	$CurrTime = [System.DateTime]::Now
+	$TimeStamp = [string]$CurrTime.Year + "-" + [String]$CurrTime.Month + "-" + [String]$CurrTime.Day + " " + [string]$CurrTime.Hour + ":" + [string]$CurrTime.Minute + ":" + [string]$CurrTime.Second
+			
+	$AlertXML = New-Object System.Text.StringBuilder
+	$AlertXML.append("<cm><id>AlertOutput</id><AlertOutput>") | Out-Null
+	$AlertXML.append("<ServiceName>").append("IISAppPool_Memory_Load").append("</ServiceName>") | Out-Null
+	$AlertXML.append("<NewState>").append($NewState).append("</NewState>") | Out-Null
+	$AlertXML.append("<OldState>").append($OldState).append("</OldState>") | Out-Null
+	$AlertXML.append("<Description>").append($Description).append("</Description>") | Out-Null
+	$AlertXML.append("<AlertTimeStamp>").append($TimeStamp).append("</AlertTimeStamp>") | Out-Null
+	$AlertXML.append("<AlertType>Monitoring</AlertType>") | Out-Null
+	$AlertXML.append("<UuId>").append($MetricName).append("_").append($Component).append("</UuId>") | Out-Null
+	$AlertXML.append("<Subject>").append($Subject).append("</Subject>") | Out-Null
+	$AlertXML.append("</AlertOutput></cm>") | Out-Null
+	
+	$AlertPayload = $AlertXML.toString()
+	#$AlertXML.Quit()
+	
+	return $AlertPayload
+}
+
+Function PostAlert([string]$AlertPayload)
+{		
+	$AgentSockPath = $AgentPath + "\bin\AgentSockIPC.exe"
+	& $AgentSockPath $AlertPayload	
+}
+
+##############################################################
+# Alert Handling Part: Comparing Thresholds and Monitor States
+##############################################################
+Function AlertHandler([int]$index,[string]$Component,[int]$Value,[string]$Description,[string]$Subject)
+{	
+ 	If ([string]$AlertFlag[$index] -eq 1)
+	{
+		$WarningThreshold = [int]$WarningThresholds[$index]
+		$CriticalThreshold = [int]$CriticalThresholds[$index]
+			
+		If($WarningThreshold -ne $CriticalThreshold)
+		{
+			If($WarningThreshold -gt $CriticalThreshold)
+			{			
+				If($Value -le $CriticalThreshold)
+				{
+					$NewState = "Critical"
+				}
+				elseif($Value -le $WarningThreshold)
+				{
+					$NewState = "Warning"
+				}
+				else
+				{
+					$NewState = "Ok"	
+				}			
+			}
+			If($WarningThreshold -lt $CriticalThreshold)
+			{
+				If($Value -ge $CriticalThreshold)
+				{
+					$NewState = "Critical"
+				}
+				elseif($Value -ge $WarningThreshold)
+				{
+					$NewState = "Warning"
+				}
+				else
+				{
+					$NewState = "Ok"	
+				}
+			}
+		}
+		else
+		{
+			$NewState = "Ok"
+		}	
+		
+		$OldState = CheckOldState $MetricNames[$index] $Component
+	    	
+		If ($OldState -ne $NewState)
+		{
+			#Send Alert
+			$Metric = $Metrics[$index] 
+			$Alert = PrepareAlert $Metric $Component $OldState $NewState $Description $Subject
+			PostAlert $Alert
+			$isAlertPosted = $?	#It returns true if last operation (AgentSockIPC.exe call) is success, else it return false
+			if ($isAlertPosted)
+			{
+				#Save New State
+				$Metric = $MetricNames[$index]
+				SaveNewState $Metric $Component $NewState
+			}
+		}				
+	}
+}
+
+Function PreparePerfData($MHash)
+{
+	$PerfDataOutput = New-Object System.Text.StringBuilder
+	$PerfDataOutput.append("<DataValues>") | Out-Null
+	Foreach($MetricKeys in $MHash.Keys)
+	{
+		$PerfDataOutput.append("<Monitor name=").append($MetricKeys).append(" output=") | Out-Null
+		Foreach($process in $MHash[$MetricKeys].Keys)
+		{
+			$PerfDataOutput.append($process).append("=").append($MHash[$MetricKeys][$process]).append(",") | Out-Null
+		}
+		$PerfDataOutput.remove($PerfDataOutput.toString().length-1, 1) | Out-Null #Removing trailing ","
+		$PerfDataOutput.append("></Monitor>") | Out-Null		
+	}
+	$PerfDataOutput.append("</DataValues>") | Out-Null
+	return $PerfDataOutput.toString()
+}
+
+#######################################################################################
+# Block of code to retrieve password age using Win32_NetworkLoginProfile wmi class
+########################################################################################
+Function IISAppPoolMemoryLoad($ArgsVar)
+{		
+	$MetricNamesStr, $MetricsStr, $WarningThresholdsStr, $CriticalThresholdsStr, $AlertFlagStr, $MetricComponentsStr = ParseArgs($ArgsVar)
+
+	$MetricNames = $MetricNamesStr.split("|")
+	$Metrics = $MetricsStr.split("|")
+	$WarningThresholds = $WarningThresholdsStr.split("|")
+	$CriticalThresholds = $CriticalThresholdsStr.split("|")
+	$AlertFlag = $AlertFlagStr.split("|")
+	$MetricComponents = $MetricComponentsStr.split("|")
+
+	$MetricsHash = @{}
+	for($index=0; $index -lt $Metrics.length; $index++)
+	{
+		$LoginProfilesHash = @{}
+		
+		$TotalMem = (Get-WmiObject -class "cim_physicalmemory" | Measure-Object -Property Capacity -Sum).Sum
+		foreach($ap in (Get-ChildItem -Path IIS:\AppPools))
+		{
+			$WorkerProcessFolder = Get-ChildItem $ap.PSPath
+			$WorkerProcesses = Get-ChildItem $WorkerProcessFolder.PSPath
+
+			$ProcessIDs = @()
+			$TotalAppMem = 0
+			
+			if($WorkerProcesses.count -ge 1){
+				
+				foreach($w in $WorkerProcesses)
+				{
+					$ProcessIDs += $w.processId
+				}
+				$TotalProcMem = 0
+				
+				foreach($p in $ProcessIDs)
+				{
+					$TheProcess = Get-Process -Id $p
+					$Pname = $TheProcess.ProcessName
+					$TotalProcMem += $TheProcess | Measure-Object -Property WorkingSet -Sum | Select-Object -ExpandProperty Sum
+				}
+				$TotalAppMem += $TotalProcMem
+			}
+					
+			$Component = $ap.name
+			$Value = (($TotalAppMem / $TotalMem)/100)
+				
+			$LoginProfilesHash.add($Component,$Value)
+			AlertHandler $index $Component $Value $Description $Subject
+		}
+		$MetricsHash.add($MetricNames[$index],$LoginProfilesHash)
+	}	
+	$PerfData = PreparePerfData $MetricsHash
+	write-host $PerfData
+}
+
+IISAppPoolMemoryLoad $Args
