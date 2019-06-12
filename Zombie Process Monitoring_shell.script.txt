@@ -1,0 +1,58 @@
+#!/bin/bash
+LANG=C
+######################################################################################
+# Use the below block of code to parse arguments in your Custom monitor bash scripts.
+######################################################################################
+script_dir=$(dirname $0)
+ 
+params=`echo $@ | tr " " "\n"`
+ 
+for param in $params
+do
+    case "$param" in
+        /metricName::*)
+            IFS="|" read -ra metricNames<<<"${param#*::}"
+        ;;
+        /metric::*)
+            IFS="|" read -ra metrics<<<"${param#*::}"
+        ;;
+        /warn::*)
+            IFS="|" read -ra warnings<<<"${param#*::}"
+        ;;
+        /critical::*)
+            IFS="|" read -ra criticals<<<"${param#*::}"
+        ;;
+        /alert::*)
+            IFS="|" read -ra doAlerts<<<"${param#*::}"
+        ;;
+        /params::*)
+            userParamsString=$(echo ${param#*::} | sed -e "s/'//g")
+            IFS="|" read -ra userParams<<<"$userParamsString"
+        ;;
+    *) esac
+done
+ 
+# You can access the variables as below
+arrayLen=${#metricNames[@]}
+ 
+echo "["
+ 
+for (( x=0; x<$arrayLen; x++ )); do
+ 
+    #calculating zombie_process_Count
+    zombie_process_Count=$(ps aux | awk {'print $8'}|grep -c Z)
+ 
+    if [[ $zombie_process_Count -ge ${criticals[x]} ]];then
+            state="Critical"
+    elif [[  $zombie_process_Count -ge ${warnings[x]} ]];then
+        state="Warning"
+    else
+            state="OK"
+    fi
+ 
+    echo "{\"alert_desc\": \"$state. zombie_process_Count is " $zombie_process_Count\"", "\"metric\": \"${metrics[x]}\"", "\"component\": \"${metrics[x]}\"", "\"state\": \"$state\", "\"value\": \"$zombie_process_Count\""}""
+ 
+ 
+done
+ 
+echo "]"

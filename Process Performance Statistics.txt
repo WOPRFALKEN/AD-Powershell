@@ -1,0 +1,458 @@
+# Custom monitor POWERSHELL scripts will be provided with below input parameters from agent while invoking the 
+# script: 
+# Cscript custom_script.ps1 "/metricName::metricName1|metricName2 /metric::metric1|metric2 /warn::warn1|warn2 /critical::crit1|crit2 /alert::do_alert1|do_alert2 /params::"args_string1|args_string2""
+# Cscript custom_script.ps1 "/metricName::IODataBytesPerSec /metric::IODataBytesPerSec /warn::0 /critical::0 /alert::1 /params::StreamProcess,BNTFTP"
+############################################################################ 
+# Use the below block of code in all the POWERSHELL custom monitor scripts to parse the parameters: 
+############################################################################ 
+######################################## Functions ####################################
+# How to save new state: Use the below code to save new state 
+#######################################################################################
+
+
+#param([String]$args)
+
+ $filepath = split-path -parent $MyInvocation.MyCommand.Definition
+ $fileAccessPath = split-path -parent $filepath
+	#write-host $filepath
+
+	
+Function SaveNewState						
+{
+	param([string]$MetricNameState,[string]$InstanceState,[string]$Value)
+
+	
+       
+	$prevstatefolder = $fileAccessPath+"\log\prevstate"
+	If (Test-Path $prevstatefolder)
+	{
+	}
+	
+	Else
+	{ 
+		New-Item -ItemType directory -Path $prevstatefolder
+	}
+	
+	 
+	
+	$ExePath = $fileAccessPath + "\log\prevstate\" + $MetricNameState + ".txt"
+	
+	
+        
+        If (Test-Path $ExePath)
+	{
+		$monexists = 0
+		$newdatafile = $null
+		$fileReader = Get-Content $ExePath
+		foreach($data in $fileReader)
+		{
+			#$MonitorName1 = $data -split("--", 2) #trim(Split(data, "--", 2)(0))
+			#$MonitorName = $MonitorName1[0]  #.Trim()
+			##echo "monitor= $MonitorName"
+			#if([string]::Compare($MonitorName,$MetricNameState +":"+ $InstanceState, $True))               
+			if($data.StartsWith($MetricNameState +":"+ $InstanceState))
+			{	
+				$monexists = 1
+				$newdatafile = $newdatafile + $MetricNameState +":"+ $InstanceState + "--" + $Value + "`r`n"
+			}
+			Else
+			{	if($data -ne ""){
+				$newdatafile = $newdatafile + $data + "`r`n" }
+			}
+		}
+		If($monexists -eq 0)
+		{
+			$newdatafile = $newdatafile + $MetricNameState +":"+ $InstanceState + "--" + $Value
+		}
+		$ExePath = $fileAccessPath + "/log/prevstate/"+ $MetricNameState + "_temp.txt"
+		$newdatafile | Out-File $ExePath
+		
+		$sourcefilename = $fileAccessPath + "/log/prevstate/" + $MetricNameState + "_temp.txt"
+		$detstinationfilename = $fileAccessPath + "/log/prevstate/" + $MetricNameState + ".txt"
+		#echo "deleting old"
+		Remove-Item $detstinationfilename
+		Rename-Item $sourcefilename $detstinationfilename
+		
+	}
+	Else
+	{
+		#Out-File $ExePath
+		$MetricNameState +":"+ $InstanceState + "--" + $Value  | Out-File $ExePath
+	}
+}
+
+######################################################################################
+# How to save old state: Use the below code to save old state 
+#######################################################################################
+
+Function CheckOldState						
+{
+	param([string]$MetricNameState,[string]$InstanceState)
+
+	
+	$ExePath = $fileAccessPath + "\log\prevstate\" + $MetricNameState + ".txt"
+	If (Test-Path $ExePath)
+	{
+		$oldstate = "Ok"
+		$fileReader = Get-Content $ExePath             
+		foreach($data in $fileReader)
+		{
+			if($data.StartsWith($MetricNameState +":"+ $InstanceState))
+			{
+				$oldstate = $data.Substring($data.IndexOf("--") + 2);
+			}
+		}
+		$CheckOldState = $oldstate
+	}
+	else
+	{
+		$CheckOldState = "Ok"
+	}
+
+	return $CheckOldState
+
+
+}
+
+
+
+################################################################## 
+# How to send alert: Use the below code to send alert 
+################################################################## 
+
+
+
+Function SendAlertToAB					
+{
+	param([string]$MetricInstance,[string]$Instance,[string]$OldState,[string]$NewState,[int]$Value)
+	
+	#write-host "sending alert"$MetricInstance
+	$currTime = [System.DateTime]::Now
+		$timeStamp = [string]$currTime.Year + "-" + [String]$currTime.Month + "-" + [String]$currTime.Day + " " + [string]$currTime.Hour + ":" + [string]$currTime.Minute + ":" + [string]$currTime.Second
+		
+	$SocketXML = ""
+	$SocketXML = $SocketXML + "<cm><id>AlertOutput</id><AlertOutput>"
+	$SocketXML = $SocketXML + "<ServiceName>"+ $MetricInstance+"</ServiceName>"
+	$SocketXML = $SocketXML + "<NewState>"+ $NewState+"</NewState>"
+	$SocketXML = $SocketXML + "<OldState>"+ $OldState+"</OldState>"
+	$SocketXML = $SocketXML + "<Description>Value of metric " + $MetricInstance + ":" + $Instance + " is " + $Value +"</Description>"
+	$SocketXML = $SocketXML + "<AlertTimeStamp>" + $timeStamp + "</AlertTimeStamp>"
+	$SocketXML = $SocketXML + "<AlertType>Monitoring</AlertType>"
+	If ($Instance -ne "")
+	{
+		$SocketXML = $SocketXML + "<UuId>"+ $MetricInstance+ "_" +$Instance+"</UuId>"
+	}
+	Else
+	{
+		$SocketXML = $SocketXML + "<UuId>"+ $MetricInstance+"</UuId>"
+	}
+	$SocketXML = $SocketXML + "<Subject>Value of metric " + $MetricInstance + ":" + $Instance + " is "+ $Value +"  </Subject>"
+	$SocketXML = $SocketXML + "</AlertOutput></cm>"
+	
+	#write-host $SocketXml
+
+	if($fileAccessPath.contains("x86"))
+        {
+		& "C:\Program Files (x86)\Vistara\Agent\bin\AgentSockIPC.exe" $SocketXml
+	}
+	else
+	{
+		& "C:\Program Files\Vistara\Agent\bin\AgentSockIPC.exe" $SocketXml
+	}
+	
+}
+
+####################################################################################################
+
+Function ProcessStatiscsMonitor
+{
+	param([int]$index)
+	$metrictemp = $MetricName[$index]
+	
+		
+	#input parameters
+
+	if($inputParams.length -eq 0)
+	{
+
+	}
+	else
+	{
+		$perfdataOutput = "<Monitor name="+ $metrictemp + " output="
+
+		$processesSet =  @()
+
+		$inputProcesses = $inputParams[$index]
+		$processesSet= $inputProcesses.split(",")
+
+		for($i=0 ;$i -lt $processesSet.length ; $i++)
+		{
+			$MetricInstanceName = $processesSet[$i]
+			$WMIValues = Get-WMIObject Win32_PerfFormattedData_PerfProc_Process -filter "name ='$MetricInstanceName'"
+			if($WMIValues -ne $null)
+			{
+				$MetricValue = [int]$WMIValues.IODataBytesPersec
+				$perfdataOutput = $perfdataOutput + $MetricInstanceName + "=" + $MetricValue + ","
+			}
+			else
+			{
+				$perfdataOutput = $perfdataOutput + $MetricInstanceName + ":InValid Object" + ","
+			}
+
+
+			If ( [string]$Alert_Flag[$index] -eq 1 )
+			{
+				[int]$Warning_value = [string]$Warning_Thres[$index]
+				[int]$Critical_value = [string]$Critical_Thres[$index]
+				If ( $Warning_value -lt $Critical_value )
+				{
+					If ( $MetricValue -gt  $Warning_value)
+					{
+						If ($MetricValue -gt  $Critical_value)
+						{
+							$NewState = "Critical"
+						}
+						Else
+						{
+							$NewState = "Warning"
+						}
+					}
+					Else
+					{
+						$NewState = "Ok"
+					}
+				}
+				Else
+				{
+					If ($MetricValue -lt  $Warning_value)
+					{
+						If ($MetricValue -lt  $Critical_value)
+						{
+							$NewState = "Critical"
+						}
+						Else
+						{
+							$NewState = "Warning"
+						}
+					}
+					Else
+					{
+						$NewState = "Ok"
+					}
+				}
+
+
+				$MetricNametemp=[string]$MetricName[$index]
+				$OldState = CheckOldState "$MetricNametemp" "$MetricInstanceName"
+				#write-host "old state is:" $OldState
+				If ( [String]$OldState -ne [String]$NewState )
+				{
+				#write-host "enterd to check states"$OldState
+				#write-host "enterd to check states"$NewState
+					#Send Alert
+					$Metrictemp = $Metric[$index] 
+					SendAlertToAB "$Metrictemp" "$MetricInstanceName" "$OldState" "$NewState" "$MetricValue"
+					#write-host "alert sended"
+					$check = $?
+					if ( $check )
+					{
+						#Save New State
+
+						$metrictemp = $MetricName[$index]
+						SaveNewState "$metrictemp" "$MetricInstanceName" "$NewState"
+					}							
+				}
+			}
+
+		}
+	}
+
+	$size = $perfdataOutput.length      #to remove last ","
+	$perfdataOutput = $perfdataOutput.substring(0,$size-1)
+	$perfdataOutput = $perfdataOutput + "></Monitor>"
+
+	################################################################## 
+	# How to send performance data: The console output should be as shown below: 
+	################################################################## 
+	
+	write-host $perfdataOutput		
+			
+		
+	################################################################# 
+	# How to send performance data: The console output should be as shown below: 
+	################################################################## 
+	
+	#write-host "<Monitor name=" + [string]$MetricName[$index] + " output= " + $Metric[$index] + "=" + $MetricValue + "></Monitor>"
+		
+		
+	
+}
+
+function ProcessPerfmonanceStatistics
+{
+	write-host "<DataValues>"
+	for($i=0 ;$i -lt $MetricName.length ; $i++)
+	{
+		ProcessStatiscsMonitor "$i"
+	}	
+	write-host "</DataValues>"
+}
+
+function GetArgs()
+{
+#param([String]$args)
+
+
+#write-host "arguments are:" $args
+
+	if($args.count -gt 0)
+	{
+	   for($i=0 ;$i -le $args.count-1 ;$i++)
+		{
+			$strArgs = $strArgs + [string]($args[$i])
+		       
+		}
+	}
+		
+	if($strArgs.Contains("/metricName::") -ne 0)
+	{
+		$MetricNameTokens1 = $strArgs -split "/metricName::", 2
+                $MetricNameTokens= $MetricNameTokens1[1].Trim() 
+
+		if($MetricNameTokens.Contains("/") -ne 0)
+		 {
+			$MetricNameTokens1 = $MetricNameTokens -split "/", 2
+              
+			$MetricNameTokens = $MetricNameTokens1[0].Trim()
+             
+			
+			#write-host "metricName " + $MetricNameTokens
+	      
+		 }
+	}
+	
+	if($strArgs.Contains("/metric::") -ne 0)
+	{
+
+            $MetricTokens1 = $strArgs -split "/metric::", 2
+            
+	    $MetricTokens = $MetricTokens1[1].Trim()
+            
+	    if($MetricTokens.Contains("/") -ne 0)
+	    {
+	    
+		     $MetricTokens1 = $MetricTokens -split "/", 2
+		     
+		     $MetricTokens = $MetricTokens1[0].Trim()
+		    
+		     #write-host "Metric is " + $MetricTokens
+
+	    }
+
+         }
+
+         if($strArgs.Contains("/warn::") -ne 0)
+	 {
+		   $Warning_ThresTokens1 = $strArgs -split "warn::", 2
+		   
+		   $Warning_ThresTokens = $Warning_ThresTokens1[1].Trim()
+         
+		   if($Warning_ThresTokens.Contains("/") -ne 0)
+		   {
+			   $Warning_ThresTokens1 = $Warning_ThresTokens  -split "/", 2
+			  
+			   $Warning_ThresTokens =  $Warning_ThresTokens1[0].Trim()
+			     #write-host "warn is " + $Warning_ThresTokens
+
+		   }
+
+          }
+
+          if($strArgs.Contains("/critical::") -ne 0)
+	  {
+		  $Critical_ThresTokens1 = $strArgs -split "/critical::", 2
+		  
+		  $Critical_ThresTokens = $Critical_ThresTokens1[1].Trim()
+		  
+		  if($Critical_ThresTokens.Contains("/") -ne 0)
+		  {
+	  
+			$Critical_ThresTokens1 = $Critical_ThresTokens -split "/", 2
+
+			$Critical_ThresTokens = $Critical_ThresTokens1[0].Trim()
+           
+			#write-host "critical is " + $Critical_ThresTokens
+		  }
+	  }
+
+	
+          if($strArgs.Contains("/alert::") -ne 0)
+	  {
+
+		   $Alert_FlagTokens1 =  $strArgs -split "/alert::", 2
+		  
+		   $Alert_FlagTokens = $Alert_FlagTokens1[1].Trim()
+		   
+		   if($Alert_FlagTokens.Contains("/") -ne 0)
+		   {
+			    $Alert_FlagTokens1= $Alert_FlagTokens -split "/", 2
+			    
+			    $Alert_FlagTokens=  $Alert_FlagTokens1[0].Trim()
+		            #write-host "Alert_FlagTokens " + $Alert_FlagTokens
+		   }
+	    
+	    }
+
+            if($strArgs.Contains("/params::") -ne 0)
+	    {
+	      
+		$ParamsTokens1 = $strArgs -split "/params::", 2
+		$ParamsTokens = $ParamsTokens1[1].Trim()
+		      
+		if($ParamsTokens.Contains("/") -ne 0)
+		{
+			$ParamsTokens1 = $ParamsTokens -split "|", 2
+			$ParamsTokens = $ParamsTokens1[0].Trim()
+			write-host "params are " + $ParamsTokens
+		 
+		}
+		#write-host $ParamsTokens
+
+	      
+	    }
+	$MetricName = @()
+	$Metric = @()
+	$Warning_Thres = @()
+        $Critical_Thres = @()
+        $Alert_Flag = @()
+	$inputParams = @()
+        #$Params = @() 
+
+	$MetricName= $MetricNameTokens.split("|")
+		
+	$Metric=$MetricTokens.split("|")
+
+	$Warning_Thres=$Warning_ThresTokens.split("|")
+	
+	
+	$Critical_Thres=$Critical_ThresTokens.split("|")
+
+	
+	$Alert_Flag=$Alert_FlagTokens.split("|")
+        
+	
+	$inputParams= $ParamsTokens.split("|")
+	
+        ProcessPerfmonanceStatistics
+
+}
+#write-host "calling arg funciton" $args[0]
+#GetArgs "$args[0]"
+
+####################################Main Calling##################################################
+
+
+$psfiledir = split-path -parent $MyInvocation.MyCommand.Definition
+
+GetArgs "$args"
+
